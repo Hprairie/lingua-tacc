@@ -1,15 +1,12 @@
 #!/bin/bash
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 
-#SBATCH --job-name=env_creation
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --gres=gpu:8
-#SBATCH --exclusive
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=128
-#SBATCH --mem=0
-#SBATCH --time=01:00:00
+#SBATCH --J env_creation
+#SBATCH --N 1
+#SBATCH --n 1
+#SBATCH --p vm-small
+#SBATCH --t 00:30:00
+#SBATCH --A MLL
 
 # Exit immediately if a command exits with a non-zero status
 set -e

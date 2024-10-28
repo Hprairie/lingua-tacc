@@ -23,8 +23,7 @@ class StoolArgs:
     )
     override: bool = False  # Wether to delete dump dir and restart
     nodes: int = -1  # The number of nodes to run the job on.
-    ngpu: int = 8  # The number of GPUs required per node.
-    ncpu: int = 16  # The number of CPUs allocated per GPU.
+    ngpu: int = -1  # The number of GPUs required per node.
     mem: str = ""  # The amount of memory to allocate.
     anaconda: str = "default"  # The path to the anaconda environment.
     constraint: str = ""  # The constraint on the nodes.
@@ -34,6 +33,7 @@ class StoolArgs:
     qos: str = ""
     partition: str = "learn"
     stdout: bool = False
+    allocation: str = "MLL" # The allocation to use for the job
 
 
 SBATCH_COMMAND = """#!/bin/bash
@@ -44,11 +44,10 @@ SBATCH_COMMAND = """#!/bin/bash
 {constraint}
 #SBATCH --job-name={name}
 #SBATCH --nodes={nodes}
-#SBATCH --gres=gpu:{ngpus}
-#SBATCH --cpus-per-gpu={ncpu}
 #SBATCH --time={time}
 #SBATCH --partition={partition}
 #SBATCH --mem={mem}
+#SBATCH -A {allocation}
 
 #SBATCH --output={dump_dir}/logs/%j/%j.stdout
 #SBATCH --error={dump_dir}/logs/%j/%j.stderr
@@ -110,8 +109,8 @@ def validate_args(args) -> None:
     if args.time == -1:
         max_times = retrieve_max_time_per_partition()
         args.time = max_times.get(
-            args.partition, 3 * 24 * 60
-        )  # Default to 3 days if not found
+            args.partition, 2 * 24 * 60
+        )  # Default to 2 days if not found
         print(
             f"No time limit specified, using max time for partitions: {args.time} minutes"
         )
@@ -141,13 +140,32 @@ def validate_args(args) -> None:
 
     args.mem = args.mem or "0"
 
+    assert args.ngpu < 0, "Variable --ngpu currently unspported, please use --nodes instead (will auto infer --ngpu)"
+
+    TACC_SYSTEM = os.environ.get("TACC_SYSTEM", None)
+    assert TACC_SYSTEM, "TACC_SYSTEM environment variable not set, unable to detect correct queue configuration"
+
+    assert TACC_SYSTEM in ["frontera", "lonestar6"], f"System {TACC_SYSTEM} not supported"
+    tacc_queue(args, TACC_SYSTEM)
+
     assert args.partition
     assert args.ngpu > 0
-    assert args.ncpu > 0
     assert args.nodes > 0
     assert args.time > 0
     assert args.partition
 
+def tacc_queue(args: StoolArgs, TACC_SYSTEM: str):
+    if TACC_SYSTEM == "lonestar6":
+        if args.partition == "gpu-a100":
+            args.ngpu = 3
+        elif args.partition == "gpu-a100-dev":
+            args.ngpu = 3
+        elif args.partition == "gpu-a100-small":
+            args.ngpu = 1
+        elif args.partition == "gpu-h100":
+            args.ngpu = 2
+        else:
+            raise ValueError(f"Unsupported partition {args.partition} for system {TACC_SYSTEM}")
 
 def launch_job(args: StoolArgs):
     # Set up args default and validate them depending on the cluster or partition requested
@@ -183,14 +201,13 @@ def launch_job(args: StoolArgs):
         else ""
     )
     sbatch = SBATCH_COMMAND.format(
+        allocation=args.allocation,
         name=job_name,
         script=args.script,
         dump_dir=dump_dir,
         nodes=args.nodes,
         tasks=args.nodes * args.ngpu,
         nodes_per_run=args.nodes,
-        ngpus=args.ngpu,
-        ncpu=args.ncpu,
         mem=args.mem,
         qos=args.qos,
         account=args.account,
