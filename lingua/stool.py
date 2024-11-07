@@ -16,24 +16,22 @@ from lingua.args import dataclass_from_dict
 class StoolArgs:
     config: Any = None
     launcher: str = "sbatch"  # Can be sbatch or bash if already in salloc
-    script: str = "apps.main.train"  # The script to run.
+    script: str = "apps.mamba.train"  # The script to run.
     copy_code: bool = True  # Wether to copy code to dump dir
-    dirs_exists_ok: bool = (
-        False  # Wether to copy new code and config and run regardless that dir exists
-    )
+    dirs_exists_ok: bool = False  # Wether to copy new code and config and run regardless that dir exists
     override: bool = False  # Wether to delete dump dir and restart
     nodes: int = -1  # The number of nodes to run the job on.
     ngpu: int = -1  # The number of GPUs required per node.
     mem: str = ""  # The amount of memory to allocate.
-    anaconda: str = "default"  # The path to the anaconda environment.
+    anaconda: str = "lingua_241028"  # The name of the anaconda environment.
     constraint: str = ""  # The constraint on the nodes.
     exclude: str = ""  # The nodes to exclude.
-    time: int = -1  # The time limit of the job (in minutes).
+    time: str = ""  # The time limit of the job (in minutes).
     account: str = ""
     qos: str = ""
     partition: str = "learn"
-    stdout: bool = False
-    allocation: str = "MLL" # The allocation to use for the job
+    stdout: bool = True
+    allocation: str = "MLL"  # The allocation to use for the job
 
 
 SBATCH_COMMAND = """#!/bin/bash
@@ -57,8 +55,8 @@ SBATCH_COMMAND = """#!/bin/bash
 #SBATCH --distribution=block
 
 # Mimic the effect of "conda init", which doesn't work for scripts
-eval "$({conda_exe} shell.bash hook)"
-source activate {conda_env_path}
+source {conda_exe}/etc/profile.d/conda.sh
+conda activate {conda_env_name}
 
 {go_to_code_dir}
 
@@ -95,25 +93,15 @@ def retrieve_max_time_per_partition() -> Dict[str, int]:
         if info["partition"]["maximums"]["time"]["infinite"]:
             max_times[info["partition"]["name"]] = 14 * 24 * 60  # 14 days
         else:
-            max_times[info["partition"]["name"]] = info["partition"]["maximums"][
-                "time"
-            ][
-                "number"
-            ]  # in minutes
+            max_times[info["partition"]["name"]] = info["partition"]["maximums"]["time"]["number"]  # in minutes
 
     return max_times
 
 
 def validate_args(args) -> None:
     # Set maximum time limit if not specified
-    if args.time == -1:
-        max_times = retrieve_max_time_per_partition()
-        args.time = max_times.get(
-            args.partition, 2 * 24 * 60
-        )  # Default to 2 days if not found
-        print(
-            f"No time limit specified, using max time for partitions: {args.time} minutes"
-        )
+    if args.time == "":
+        args.time = "48:00:00"
 
     if args.constraint:
         args.constraint = f"#SBATCH --constraint={args.constraint}"
@@ -127,17 +115,6 @@ def validate_args(args) -> None:
     if getattr(args, "exclude", ""):
         args.exclude = f"#SBATCH --exclude={args.exclude}"
 
-    if hasattr(args, "anaconda") and args.anaconda:
-        if args.anaconda == "default":
-            args.anaconda = (
-                subprocess.check_output("which python", shell=True)
-                .decode("ascii")
-                .strip()
-            )
-        else:
-            args.anaconda = f"{args.anaconda}/bin/python"
-        assert os.path.isfile(args.anaconda)
-
     args.mem = args.mem or "0"
 
     assert args.ngpu < 0, "Variable --ngpu currently unspported, please use --nodes instead (will auto infer --ngpu)"
@@ -145,17 +122,21 @@ def validate_args(args) -> None:
     TACC_SYSTEM = os.environ.get("TACC_SYSTEM", None)
     assert TACC_SYSTEM, "TACC_SYSTEM environment variable not set, unable to detect correct queue configuration"
 
-    assert TACC_SYSTEM in ["frontera", "lonestar6"], f"System {TACC_SYSTEM} not supported"
+    print(TACC_SYSTEM)
+    assert TACC_SYSTEM in [
+        "frontera",
+        "ls6",
+    ], f"System {TACC_SYSTEM} not supported"
     tacc_queue(args, TACC_SYSTEM)
 
     assert args.partition
     assert args.ngpu > 0
     assert args.nodes > 0
-    assert args.time > 0
     assert args.partition
 
+
 def tacc_queue(args: StoolArgs, TACC_SYSTEM: str):
-    if TACC_SYSTEM == "lonestar6":
+    if TACC_SYSTEM == "ls6":
         if args.partition == "gpu-a100":
             args.ngpu = 3
         elif args.partition == "gpu-a100-dev":
@@ -166,6 +147,16 @@ def tacc_queue(args: StoolArgs, TACC_SYSTEM: str):
             args.ngpu = 2
         else:
             raise ValueError(f"Unsupported partition {args.partition} for system {TACC_SYSTEM}")
+    else:
+        raise ValueError(f"Unsupported system {TACC_SYSTEM}. Currently only support lonestar6.")
+
+
+def create_datetime_hash():
+    from datetime import datetime
+    import hashlib
+
+    return hashlib.sha256(datetime.now().isoformat().encode("utf-8")).hexdigest()
+
 
 def launch_job(args: StoolArgs):
     # Set up args default and validate them depending on the cluster or partition requested
@@ -173,7 +164,18 @@ def launch_job(args: StoolArgs):
     dump_dir = args.config["dump_dir"]
     job_name = args.config["name"]
     print("Creating directories...")
-    os.makedirs(dump_dir, exist_ok=args.dirs_exists_ok or args.override)
+    try:
+        os.makedirs(dump_dir, exist_ok=args.dirs_exists_ok or args.override)
+    except FileExistsError as e:
+        confirm = input(
+            f"Directory {dump_dir} already exists, would you like to create continue with hashed name ? (yes/no): "
+        )
+        if confirm.lower() == "yes":
+            dump_dir += "_" + create_datetime_hash()
+            os.makedirs(dump_dir)
+        else:
+            print("Operation cancelled.")
+            return
     if args.override:
         confirm = input(
             f"Are you sure you want to delete the directory '{dump_dir}'? This action cannot be undone. (yes/no): "
@@ -193,13 +195,10 @@ def launch_job(args: StoolArgs):
     with open(f"{dump_dir}/base_config.yaml", "w") as cfg:
         cfg.write(OmegaConf.to_yaml(args.config))
 
-    conda_exe = os.environ.get("CONDA_EXE", "conda")
-    conda_env_path = os.path.dirname(os.path.dirname(args.anaconda))
-    log_output = (
-        "-o $DUMP_DIR/logs/%j/%j_%t.out -e $DUMP_DIR/logs/%j/%j_%t.err"
-        if not args.stdout
-        else ""
-    )
+    conda_exe = os.environ.get("CONDA_ROOT", None)
+    if conda_exe is None:
+        raise EnvironmentError("$CONDA_ROOT not set. Please set the environment variable for anaconda's base path.")
+    log_output = "-o $DUMP_DIR/logs/%j/%j_%t.out -e $DUMP_DIR/logs/%j/%j_%t.err" if not args.stdout else ""
     sbatch = SBATCH_COMMAND.format(
         allocation=args.allocation,
         name=job_name,
@@ -216,7 +215,7 @@ def launch_job(args: StoolArgs):
         time=args.time,
         partition=args.partition,
         conda_exe=conda_exe,
-        conda_env_path=conda_env_path,
+        conda_env_name=args.anaconda,
         log_output=log_output,
         go_to_code_dir=f"cd {dump_dir}/code/" if args.copy_code else "",
     )

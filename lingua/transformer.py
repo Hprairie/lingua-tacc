@@ -117,9 +117,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor, seq_dim: int
         2,
         2,
     ), f"freqs_cis vs x: {(freqs_cis.shape, x.shape)}"
-    shape = [
-        d if i == seq_dim or i == ndim - 3 else 1 for i, d in enumerate(x.shape[:-2])
-    ] + [2, 2]
+    shape = [d if i == seq_dim or i == ndim - 3 else 1 for i, d in enumerate(x.shape[:-2])] + [2, 2]
     return freqs_cis.view(*shape)
 
 
@@ -131,9 +129,7 @@ def apply_rotary_emb(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     xq_ = xq.reshape(*xq.shape[:-1], -1, 1, 2)  # B S H D -> B S H D/2 1 2
     xk_ = xk.reshape(*xk.shape[:-1], -1, 1, 2)  # B S H D -> B S H D/2 1 2
-    freqs_cis = reshape_for_broadcast(
-        freqs_cis, xq_, seq_dim
-    ).float()  # S D/2 2 2 -> 1 S 1 D/2 2 2
+    freqs_cis = reshape_for_broadcast(freqs_cis, xq_, seq_dim).float()  # S D/2 2 2 -> 1 S 1 D/2 2 2
     xq_out = (xq_ * freqs_cis).sum(5).flatten(3)
     xk_out = (xk_ * freqs_cis).sum(5).flatten(3)
     return xq_out.type_as(xq), xk_out.type_as(xk)
@@ -237,13 +233,9 @@ class RotaryEmbedding(torch.nn.Module):
         )
 
     def reset_parameters(self):
-        self.freqs_cis[...] = precompute_freqs_cis(
-            dim=self.head_dim, end=self.max_seqlen, theta=self.theta
-        )
+        self.freqs_cis[...] = precompute_freqs_cis(dim=self.head_dim, end=self.max_seqlen, theta=self.theta)
 
-    def forward(
-        self, seqlen: Optional[int] = None, tok_idx: Optional[torch.Tensor] = None
-    ):
+    def forward(self, seqlen: Optional[int] = None, tok_idx: Optional[torch.Tensor] = None):
         """
         Return freqs_cis corresponding to consecutive seqlen positions or the corresponding tok_idx positions
         Args:
@@ -388,9 +380,7 @@ class Attention(nn.Module):
             )
             output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
         else:
-            raise NotImplementedError(
-                f"Attention implementation {attn_impl} not supported"
-            )
+            raise NotImplementedError(f"Attention implementation {attn_impl} not supported")
 
         output = self.wo(output.reshape(output_shape))
 
@@ -479,9 +469,7 @@ class TransformerBlock(nn.Module):
     def __init__(self, args: BaseTransformerArgs):
         super().__init__()
 
-        assert (args.head_dim is not None) or (
-            args.n_heads is not None
-        ), "Should specify at least head_dim or n_heads"
+        assert (args.head_dim is not None) or (args.n_heads is not None), "Should specify at least head_dim or n_heads"
         self.head_dim = args.head_dim or args.dim // args.n_heads
         self.n_heads = args.n_heads or args.dim // args.head_dim
         self.n_kv_heads = args.n_kv_heads or self.n_heads

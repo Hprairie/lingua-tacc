@@ -19,6 +19,8 @@ from lingua.distributed import get_is_master
 
 import wandb
 
+import torch.distributed as dist
+
 
 @dataclass
 class ProfilerArgs:
@@ -41,9 +43,7 @@ def perfetto_to_html(json_file, html_file):
     root = os.path.dirname(viztracer.__file__)
     sub = {}
     json_file = gzip.open(json_file) if ".gz" in str(json_file) else open(json_file)
-    with open(
-        os.path.join(root, "html/trace_viewer_embedder.html"), encoding="utf-8"
-    ) as f:
+    with open(os.path.join(root, "html/trace_viewer_embedder.html"), encoding="utf-8") as f:
         tmpl = f.read()
     with open(os.path.join(root, "html/trace_viewer_full.html"), encoding="utf-8") as f:
         sub["trace_viewer_full"] = f.read()
@@ -80,11 +80,7 @@ class PyTorchProfilerWandb(PyTorchProfiler):
     def _on_trace(self, prof: torch.profiler.profiler.profile) -> None:
         super()._on_trace(prof)
         if get_is_master() and wandb.run is not None:
-            filename = list(
-                Path(self.main_profiler.output_dir).glob(
-                    "profile_CPU_CUDA*/*.pt.trace.json*"
-                )
-            )[0]
+            filename = list(Path(self.main_profiler.output_dir).glob("profile_CPU_CUDA*/*.pt.trace.json*"))[0]
             html_path = str(filename).replace(".json", ".html")
             perfetto_to_html(filename, html_path)
             wandb.log({"profile_trace": wandb.Html(html_path)})
@@ -94,9 +90,7 @@ class MemSnapshotsProfilerWandb(MemSnapshotsProfiler):
     def __exit__(self, exc_type, exc_val, exc_tb):
         super().__exit__(exc_type, exc_val, exc_tb)
         if get_is_master() and wandb.run is not None:
-            filename = list(
-                Path(self.main_profiler.output_dir).glob("memory_trace_plot/*.html")
-            )[0]
+            filename = list(Path(self.main_profiler.output_dir).glob("memory_trace_plot/*.html"))[0]
             wandb.log({"memory_trace": wandb.Html(open(filename), inject=False)})
 
 
@@ -109,8 +103,11 @@ def maybe_run_profiler(dump_dir, module, config: ProfilerArgs):
 
         logger.info(f"Profiling active.  Traces will be saved at {trace_dir}")
 
-        if not os.path.exists(trace_dir):
+        if get_is_master() and not os.path.exists(trace_dir):
             os.makedirs(trace_dir, exist_ok=True)
+
+        if dist.is_initialized():
+            dist.barrier()
 
         with xformers.profiler.profile(
             output_dir=trace_dir,

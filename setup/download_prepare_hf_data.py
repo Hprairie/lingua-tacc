@@ -129,9 +129,9 @@ def main(dataset, memory, data_dir, seed=42):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("dataset", type=str)
-    parser.add_argument("memory", type=float, default=8)
-    parser.add_argument("--data_dir", type=str, default="data")
+    parser.add_argument("--dataset", type=str)
+    parser.add_argument("--memory", type=float, default=8)
+    parser.add_argument("--data-dir", type=str, default="data")
     parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()
