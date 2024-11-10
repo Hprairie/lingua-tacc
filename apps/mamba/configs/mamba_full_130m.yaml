@@ -1,0 +1,70 @@
+# Template config, need to change dump_dir, data.root_dir and tokenizer.path
+
+dump_dir: /home1/09753/hprairie/scratch/mamba/130m/full2
+name: "mamba130m"
+steps: 60_000
+probe_freq: null #100
+
+grad_acc_steps: 32
+
+seed: 777
+optim:
+  lr: 3.0e-3
+  weight_decay: 0.033
+  warmup: 5000
+  lr_min_ratio: 0.000001
+  clip: 1.0
+
+distributed:
+  fsdp_type: full_shard
+  compile: true
+  model_dtype: bf16
+  matmul_allow_tf32: false
+  selective_activation_checkpointing: true
+  tp_size: 1
+
+model:
+  dim: 768
+  n_heads: 24
+  n_groups: 24
+  state_dim: 128
+  conv_size: 4
+  n_layers: 24
+  dt_bias: true
+  D_has_head_dim: false
+  learnable_init_states: false
+  ffn_dim_multiplier: 1
+  init_args:
+    A_init_min: 0.01
+    A_init_max: 2
+
+data:
+  root_dir: /home1/09753/hprairie/scratch/data-shuffled
+  sources:
+    fineweb_edu_10bt: 100.0
+  batch_size: 4
+  prefetch_size: 1024
+  seq_len: 4096
+  n_views: 2
+  load_async: true
+  add_bos: true
+  add_eos: true
+  tokenizer:
+    name: huggingface
+    path: EleutherAI/gpt-neox-20b
+
+profiling:
+  run: true
+
+checkpoint:
+  dump:
+    every: 2500
+    keep: 3
+  eval:
+    every: 5000
+    keep: 2
+
+logging:
+  freq: 1
+
+async_eval_gpus: 8

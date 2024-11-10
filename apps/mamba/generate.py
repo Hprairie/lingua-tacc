@@ -79,9 +79,7 @@ class PackedCausalMambaGenerator(PackedCausalTransformerGenerator):
 
         self.prefill_tok_id = torch.repeat_interleave(lengths).unsqueeze(0).int()
         self.cu_seqlens = lengths.cumsum(0)
-        self.cu_seqlens = torch.cat(
-            [torch.tensor([0], device=self.device), self.cu_seqlens]
-        ).int()
+        self.cu_seqlens = torch.cat([torch.tensor([0], device=self.device), self.cu_seqlens]).int()
 
     @torch.compiler.disable
     def setup_generation(self, lengths):
@@ -117,9 +115,7 @@ def main():
     gen_cfg = dataclass_from_dict(PackedCausalMambaGeneratorArgs, cfg, strict=False)
     print(cfg)
 
-    model, tokenizer = load_consolidated_model_and_tokenizer(
-        cfg.ckpt, model_cls=LMMamba, model_args_cls=LMMambaArgs
-    )
+    model, tokenizer = load_consolidated_model_and_tokenizer(cfg.ckpt, model_cls=LMMamba, model_args_cls=LMMambaArgs)
 
     generator = PackedCausalMambaGenerator(gen_cfg, model, tokenizer)
 

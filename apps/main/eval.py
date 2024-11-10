@@ -26,9 +26,18 @@ from lingua.distributed import (
     setup_torch_distributed,
 )
 
+from lingua.data import DataArgs, init_dataloader_state_from_args, build_dataloader_from_args
+
 EVAL_FOLDER_NAME = "{:010d}"
 
 logger = logging.getLogger()
+
+
+@dataclass
+class CustomDatasetEvalArgs:
+    data_args: DataArgs = field(default_factory=DataArgs)
+    batch_size: int = 32
+    max_samples: Optional[int] = None
 
 
 @dataclass
@@ -63,9 +72,7 @@ class EvalArgs:
     dump_dir: Optional[str] = None
     metric_log_dir: Optional[str] = None
     ckpt_dir: str = ""
-    generator: PackedCausalTransformerGeneratorArgs = field(
-        default_factory=PackedCausalTransformerGeneratorArgs
-    )
+    generator: PackedCausalTransformerGeneratorArgs = field(default_factory=PackedCausalTransformerGeneratorArgs)
     harness: Optional[LMHarnessArgs] = field(default_factory=LMHarnessArgs)
 
     wandb: Optional[Any] = None

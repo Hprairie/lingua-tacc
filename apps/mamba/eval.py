@@ -40,9 +40,7 @@ class EvalArgs:
     dump_dir: Optional[str] = None
     metric_log_dir: Optional[str] = None
     ckpt_dir: str = ""
-    generator: PackedCausalMambaGeneratorArgs = field(
-        default_factory=PackedCausalMambaGeneratorArgs
-    )
+    generator: PackedCausalMambaGeneratorArgs = field(default_factory=PackedCausalMambaGeneratorArgs)
     harness: Optional[LMHarnessArgs] = field(default_factory=LMHarnessArgs)
 
     wandb: Optional[Any] = None
@@ -70,9 +68,7 @@ def launch_eval(cfg: EvalArgs):
     consolidate_path = str(consolidate_path)
     torch.distributed.barrier()
     logger.info("Loading model")
-    model, tokenizer = load_consolidated_model_and_tokenizer(
-        consolidate_path, LMMamba, LMMambaArgs
-    )
+    model, tokenizer = load_consolidated_model_and_tokenizer(consolidate_path, LMMamba, LMMambaArgs)
     logger.info("Model loaded")
     model.eval()
     generator = PackedCausalMambaGenerator(cfg.generator, model, tokenizer)

@@ -41,6 +41,7 @@ class BaseMambaArgs:
 
     state_dim: int = 128
     n_groups: int = 1
+    group_rank: Optional[int] = None
     conv_size: Optional[int] = None
 
     dt_bias: bool = False
@@ -79,6 +80,7 @@ class SSM(nn.Module):
         state_dim: int,
         n_heads: int,
         n_groups: int,
+        group_rank: int | None,
         conv_size: Optional[int],
         dt_bias: bool,
         D_has_head_dim: Optional[bool],
@@ -103,16 +105,22 @@ class SSM(nn.Module):
         self.head_dim = self.hidden_dim // n_heads
         self.n_heads = n_heads
         self.n_groups = n_groups
+        self.group_rank = group_rank
 
         self.dt_limit = dt_limit
 
         self.chunk_size = chunk_size
 
         # Order: [z, x, B, C, dt]
-        d_in_proj = (
-            2 * self.hidden_dim + 2 * self.n_groups * self.state_dim + self.n_heads
-        )
-        self.in_proj = nn.Linear(dim, d_in_proj, bias=False)
+        if group_rank is None:
+            d_in_proj = 2 * self.hidden_dim + 2 * self.n_groups * self.state_dim + self.n_heads
+            self.in_proj = nn.Linear(dim, d_in_proj, bias=False)
+        else:
+            d_in_proj = 2 * self.hidden_dim + 2 * self.state_dim + 2 * self.n_groups * self.group_rank + self.n_heads
+            self.in_proj = nn.Linear(dim, d_in_proj, bias=False)
+            self.lowrank_proj = nn.Linear(
+                2 * self.group_rank * self.n_groups, 2 * self.n_groups * self.state_dim, bias=False
+            )
 
         self.conv_size = conv_size
         self.conv_dim = None
@@ -126,9 +134,7 @@ class SSM(nn.Module):
 
         self.learnable_init_states = learnable_init_states
         if learnable_init_states:
-            self.init_states = nn.Parameter(
-                torch.zeros(n_heads, self.head_dim, state_dim)
-            )
+            self.init_states = nn.Parameter(torch.zeros(n_heads, self.head_dim, state_dim))
 
         self.dt_bias = None
         if dt_bias:
@@ -146,9 +152,7 @@ class SSM(nn.Module):
 
         self.ssm_norm = RMSNorm(self.hidden_dim, eps=1e-5)
 
-        self.dt_limit_kwargs = (
-            {} if self.dt_limit == (0.0, float("inf")) else dict(dt_limit=self.dt_limit)
-        )
+        self.dt_limit_kwargs = {} if self.dt_limit == (0.0, float("inf")) else dict(dt_limit=self.dt_limit)
 
     def forward(
         self,
@@ -163,15 +167,31 @@ class SSM(nn.Module):
 
         # Causal conv1d path
         if self.conv_size is not None:
-            z, xBC, dt = torch.split(
-                zxbcdt,
-                [
-                    self.hidden_dim,
-                    self.hidden_dim + 2 * self.n_groups * self.state_dim,
-                    self.n_heads,
-                ],
-                dim=-1,
-            )
+            if self.group_rank is None:
+                z, xBC, dt = torch.split(
+                    zxbcdt,
+                    [
+                        self.hidden_dim,
+                        self.hidden_dim + 2 * self.n_groups * self.state_dim,
+                        self.n_heads,
+                    ],
+                    dim=-1,
+                )
+            else:
+                z, x, baseBC, specialBC, dt = torch.split(
+                    zxbcdt,
+                    [
+                        self.hidden_dim,
+                        self.hidden_dim,
+                        2 * self.state_dim,
+                        2 * self.n_groups * self.group_rank,
+                        self.n_heads,
+                    ],
+                    dim=-1,
+                )
+                groupBC = self.lowrank_proj(specialBC)
+                BC = baseBC.repeat(1, 1, self.n_groups) + groupBC
+                xBC = torch.cat([x, BC], -1)  # Concat along last dim
 
             conv1d = log_stats(self.conv_weight, "conv1d.w")
             xBC = log_stats(xBC, "conv1d.in")
@@ -203,9 +223,7 @@ class SSM(nn.Module):
                 ).unsqueeze(0)
 
             else:
-                raise NotImplementedError(
-                    f"SSM implementation {ssm_impl} not supported"
-                )
+                raise NotImplementedError(f"SSM implementation {ssm_impl} not supported")
 
             xBC = log_stats(xBC, "conv1d.out")
 
@@ -235,18 +253,12 @@ class SSM(nn.Module):
         if self.learnable_init_states:
             initial_states = self.init_states.expand(bsz, -1, -1, -1)
 
-        x = x.view(
-            bsz, seq_len, self.n_heads, self.head_dim
-        )  # (bsz, seq_len, n_heads, head_dim)
+        x = x.view(bsz, seq_len, self.n_heads, self.head_dim)  # (bsz, seq_len, n_heads, head_dim)
 
         A_log = log_stats(self.A_log, "A_log")
         A = -torch.exp(A_log.float())
-        B = B.view(
-            bsz, seq_len, self.n_groups, self.state_dim
-        )  # (bsz, seq_len, ngroups, state_dim)
-        C = C.view(
-            bsz, seq_len, self.n_groups, self.state_dim
-        )  # (bsz, seq_len, ngroups, state_dim)
+        B = B.view(bsz, seq_len, self.n_groups, self.state_dim)  # (bsz, seq_len, ngroups, state_dim)
+        C = C.view(bsz, seq_len, self.n_groups, self.state_dim)  # (bsz, seq_len, ngroups, state_dim)
 
         A, B, C = log_stats(A, "A"), log_stats(B, "B"), log_stats(C, "C")  # For probing
 
@@ -339,9 +351,9 @@ class SSM(nn.Module):
             self.dt_bias.uniform_(init_args.dt_min, init_args.dt_max)
             self.dt_bias.clamp_(min=init_args.dt_init_floor)
             # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
-            self.dt_bias.data = self.dt_bias.data + torch.log(
-                -torch.expm1(-self.dt_bias.data)
-            )
+            result = self.dt_bias.data + torch.log(-torch.expm1(-self.dt_bias.data))
+            result = result.to(self.dt_bias.dtype)
+            self.dt_bias.copy_(result)
 
         if self.conv_size is not None:
             conv_std = init_std or (self.conv_size ** (-0.5))
@@ -376,6 +388,7 @@ class MambaBlock(nn.Module):
             state_dim=args.state_dim,
             n_heads=args.n_heads,
             n_groups=args.n_groups,
+            group_rank=args.group_rank,
             conv_size=args.conv_size,
             dt_bias=args.dt_bias,
             D_has_head_dim=args.D_has_head_dim,
@@ -390,9 +403,7 @@ class MambaBlock(nn.Module):
         cu_seqlens: Optional[torch.Tensor],
         ssm_impl: str = "ssm",
     ) -> torch.Tensor:
-        x = x + self.ssm(
-            self.ssm_norm(x), tok_idx=tok_idx, cu_seqlens=cu_seqlens, ssm_impl=ssm_impl
-        )
+        x = x + self.ssm(self.ssm_norm(x), tok_idx=tok_idx, cu_seqlens=cu_seqlens, ssm_impl=ssm_impl)
         return x
 
     def init_weights(self, init_std=None, factor=1.0, init_args: InitArgs = InitArgs()):

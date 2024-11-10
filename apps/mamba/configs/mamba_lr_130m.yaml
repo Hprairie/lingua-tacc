@@ -1,7 +1,7 @@
 # Template config, need to change dump_dir, data.root_dir and tokenizer.path
 
-# dump_dir: !!CHANGETHIS!!
-name: "debug"
+dump_dir: /home1/09753/hprairie/scratch/mamba/130m/base1
+name: "mamba130m"
 steps: 60_000
 probe_freq: null #100
 
@@ -22,22 +22,24 @@ distributed:
   tp_size: 1
 
 model:
-  dim: 2048
-  n_heads: 32
-  n_groups: 1
+  dim: 768
+  n_heads: 24
+  n_groups: 24
   state_dim: 128
   conv_size: 4
-  n_layers: 50
-  dt_bias: false
+  n_layers: 24
+  dt_bias: true
   D_has_head_dim: false
+  learnable_init_states: false
+  ffn_dim_multiplier: 1
   init_args:
     A_init_min: 0.01
     A_init_max: 2
 
 data:
-  root_dir: data/shuffled
+  root_dir: /home1/09753/hprairie/scratch/data-shuffled
   sources:
-    dclm_baseline_1.0: 100.0
+    fineweb_edu_10bt: 100.0
   batch_size: 4
   prefetch_size: 1024
   seq_len: 4096
@@ -46,8 +48,8 @@ data:
   add_bos: true
   add_eos: true
   tokenizer:
-    name: tiktoken
-    path: tokenizers/cl_toplang_128k.tiktoken
+    name: huggingface
+    path: EleutherAI/gpt-neox-20b
 
 profiling:
   run: true
@@ -83,5 +85,3 @@ eval:
     reduce_generation_overhead: false
     max_tokens: 16384
     dtype: bf16
-
-  mp_size: 1
