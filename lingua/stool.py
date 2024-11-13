@@ -26,7 +26,7 @@ class StoolArgs:
     anaconda: str = "lingua_241028"  # The name of the anaconda environment.
     constraint: str = ""  # The constraint on the nodes.
     exclude: str = ""  # The nodes to exclude.
-    time: str = ""  # The time limit of the job (in minutes).
+    time: str = ""  # The time limit of the job
     account: str = ""
     qos: str = ""
     partition: str = "learn"
