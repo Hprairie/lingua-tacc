@@ -22,10 +22,10 @@ distributed:
     tp_size: 1
 
 model:
-    dim: 1024
-    n_layers: 8
+    dim: 768
+    n_layers: 12
     n_heads: 16
-    state_dim: 128
+    state_dim: 64
     conv_size: 4
     dt_bias: false
     #init_std_factor: "current_depth"

@@ -20,6 +20,8 @@ from mamba_ssm.ops.triton.selective_state_update import selective_state_update
 from lingua.transformer import InitStdFactor, RMSNorm
 from lingua.probe import log_stats
 
+from einops import rearrange
+
 
 @dataclass
 class InitArgs:
@@ -43,6 +45,9 @@ class BaseMambaArgs:
     n_groups: int = 1
     group_rank: Optional[int] = None
     conv_size: Optional[int] = None
+
+    bias: bool = False
+    conv_bias: bool = True
 
     dt_bias: bool = False
     D_has_head_dim: bool = False
@@ -82,6 +87,8 @@ class SSM(nn.Module):
         n_groups: int,
         group_rank: int | None,
         conv_size: Optional[int],
+        conv_bias: bool,
+        bias: bool,
         dt_bias: bool,
         D_has_head_dim: Optional[bool],
         learnable_init_states: bool,
@@ -110,14 +117,16 @@ class SSM(nn.Module):
         self.dt_limit = dt_limit
 
         self.chunk_size = chunk_size
+        self.has_conv_bias = conv_bias
+        self.has_bias = bias
 
         # Order: [z, x, B, C, dt]
         if group_rank is None:
             d_in_proj = 2 * self.hidden_dim + 2 * self.n_groups * self.state_dim + self.n_heads
-            self.in_proj = nn.Linear(dim, d_in_proj, bias=False)
+            self.in_proj = nn.Linear(dim, d_in_proj, bias=self.has_bias)
         else:
             d_in_proj = 2 * self.hidden_dim + 2 * self.state_dim + 2 * self.n_groups * self.group_rank + self.n_heads
-            self.in_proj = nn.Linear(dim, d_in_proj, bias=False)
+            self.in_proj = nn.Linear(dim, d_in_proj, bias=self.has_bias)
             self.lowrank_proj = nn.Linear(
                 2 * self.group_rank * self.n_groups, 2 * self.n_groups * self.state_dim, bias=False
             )
@@ -130,7 +139,14 @@ class SSM(nn.Module):
                 conv_size in [2, 3, 4]
             ), f"Causal conv1d only supports conv_size in [2, 3, 4] and hidden_dim/head_dim % 8 == 0, got {self.conv_dim} and {conv_size}"
             self.conv_dim = self.hidden_dim + 2 * self.n_groups * self.state_dim
-            self.conv_weight = nn.Parameter(torch.empty((self.conv_dim, conv_size)))
+            self.conv1d = nn.Conv1d(
+                in_channels=self.conv_dim,
+                out_channels=self.conv_dim,
+                bias=self.has_conv_bias,
+                kernel_size=self.conv_size,
+                groups=self.conv_dim,
+                padding=self.conv_size - 1,
+            )
 
         self.learnable_init_states = learnable_init_states
         if learnable_init_states:
@@ -193,7 +209,7 @@ class SSM(nn.Module):
                 BC = baseBC.repeat(1, 1, self.n_groups) + groupBC
                 xBC = torch.cat([x, BC], -1)  # Concat along last dim
 
-            conv1d = log_stats(self.conv_weight, "conv1d.w")
+            conv1d = log_stats(self.conv1d.weight, "conv1d.w")
             xBC = log_stats(xBC, "conv1d.in")
 
             if ssm_impl == "ssm":  # For training
@@ -207,8 +223,8 @@ class SSM(nn.Module):
 
                 xBC = causal_conv1d_fn(
                     x=xBC.transpose(1, 2),
-                    weight=conv1d,
-                    bias=None,
+                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                    bias=self.conv1d.bias,
                     activation="silu",
                     seq_idx=tok_idx,
                 ).transpose(1, 2)
@@ -217,8 +233,8 @@ class SSM(nn.Module):
                 xBC = causal_conv1d_update(
                     x=xBC.squeeze(0),
                     conv_state=self.cache.conv_cache,
-                    weight=self.conv_weight,
-                    bias=None,
+                    weight=rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                    bias=self.conv1d.bias,
                     activation="silu",
                 ).unsqueeze(0)
 
@@ -358,7 +374,7 @@ class SSM(nn.Module):
         if self.conv_size is not None:
             conv_std = init_std or (self.conv_size ** (-0.5))
             nn.init.trunc_normal_(
-                self.conv_weight,
+                self.conv1d.weight,
                 mean=0.0,
                 std=conv_std,
                 a=-3 * conv_std,
@@ -394,6 +410,8 @@ class MambaBlock(nn.Module):
             D_has_head_dim=args.D_has_head_dim,
             learnable_init_states=args.learnable_init_states,
             chunk_size=args.ssm_chunk_size,
+            conv_bias=args.conv_bias,
+            bias=args.bias,
         )
 
     def forward(

@@ -81,11 +81,32 @@ def consolidate_checkpoints(ckpt_dir: str):
         consolidate_path.mkdir(exist_ok=True)
         logger.info(f"Consolidating to: {str(consolidate_path)}")
         dcp_to_torch_save(ckpt_dir, str(consolidate_path / CONSOLIDATE_NAME))
-        (consolidate_path / "params.json").write_text(
-            (Path(ckpt_dir) / "params.json").read_text()
-        )
+        (consolidate_path / CONFIG_NAME).write_text((Path(ckpt_dir) / CONFIG_NAME).read_text())
         logger.info("Consolidated !")
     return consolidate_path
+
+
+def load_from_checkpoint(
+    ckpt_dir: str,
+    model: nn.Module,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    model_key: str = "model",
+    optim_key: str = "optim",
+):
+    if not (Path(ckpt_dir) / ".metadata").exists():
+        raise ValueError(
+            f"Please convert the checkpoint distcp format using `torch.distributed.checkpoint.format_utils.torch_save_to_dcp` before loading it"
+        )
+
+    state_dict = {}
+    if optimizer is not None:
+        state_dict[model_key], state_dict[optim_key] = get_state_dict(model, optimizer)
+    else:
+        state_dict[model_key] = get_model_state_dict(model)
+        if model_key == "":  # If only loading a model directly, the key should be empty
+            state_dict = state_dict.pop(model_key)
+
+    dcp.load(state_dict, checkpoint_id=ckpt_dir)
 
 
 class CheckpointManager:
@@ -101,11 +122,7 @@ class CheckpointManager:
         self.existing_saves = self.get_existing_saves()
 
     def get_existing_saves(self) -> List[Path]:
-        folders = [
-            p
-            for p in Path(self.path).iterdir()
-            if p.is_dir() and re.match(RE_FOLDER, p.name)
-        ]
+        folders = [p for p in Path(self.path).iterdir() if p.is_dir() and re.match(RE_FOLDER, p.name)]
         folders.sort(key=lambda p: _get_key_step(p.name))
         return folders
 
@@ -171,9 +188,7 @@ class CheckpointManager:
             dist.barrier()
         return folder
 
-    def _get_dp_tp_mesh(
-        self, device_mesh: Optional[DeviceMesh] = None
-    ) -> Tuple[int, int]:
+    def _get_dp_tp_mesh(self, device_mesh: Optional[DeviceMesh] = None) -> Tuple[int, int]:
         dp_rank = 0
         tp_rank = 0
         if device_mesh is not None:
@@ -230,9 +245,7 @@ class CheckpointManager:
         dp_rank, tp_rank = self._get_dp_tp_mesh(device_mesh)
         if tp_rank == 0:
             train_state_name = TRAIN_STATE_NAME.format(dp_rank)
-            logger.info(
-                f"Saving train state to: {str(curr_save_dir / train_state_name)}"
-            )
+            logger.info(f"Saving train state to: {str(curr_save_dir / train_state_name)}")
             with open(curr_save_dir / train_state_name, "w") as f:
                 json.dump(train_state.state_dict(), f)
             logger.info("Train state saved !")

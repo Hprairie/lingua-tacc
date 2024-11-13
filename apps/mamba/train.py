@@ -24,7 +24,7 @@ from torch.distributed.checkpoint.stateful import Stateful
 from torch.distributed._tensor import DTensor
 
 from lingua.args import dataclass_from_dict, dump_config, flatten_dict
-from lingua.checkpoint import CheckpointArgs, CheckpointManager
+from lingua.checkpoint import CheckpointArgs, CheckpointManager, load_from_checkpoint
 
 from lingua.data import (
     DataArgs,
@@ -132,9 +132,7 @@ def validate_train_args(args: TrainArgs, output_size: int):
     if args.model.vocab_size < 0:
         logger.info(f"Setting model output size to {args.model.vocab_size}")
         args.model.vocab_size = output_size
-    assert (
-        args.model.vocab_size == output_size
-    ), "Vocab size should be the same as output size"
+    assert args.model.vocab_size == output_size, "Vocab size should be the same as output size"
 
     assert args.dump_dir, "Dump dir not set"
 
@@ -146,56 +144,31 @@ def validate_train_args(args: TrainArgs, output_size: int):
         data_path = os.path.join(args.data.root_dir, source)
         assert os.path.exists(data_path), f"{data_path} doesn't exist"
 
-    if (
-        args.distributed.dp_replicate
-        * args.distributed.dp_shard
-        * args.distributed.tp_size
-        != get_world_size()
-    ):
+    if args.distributed.dp_replicate * args.distributed.dp_shard * args.distributed.tp_size != get_world_size():
         assert get_world_size() % args.distributed.dp_shard == 0
         args.distributed.dp_replicate = get_world_size() // args.distributed.dp_shard
 
         assert args.distributed.dp_replicate % args.distributed.tp_size == 0
-        args.distributed.dp_replicate = (
-            args.distributed.dp_replicate // args.distributed.tp_size
-        )
+        args.distributed.dp_replicate = args.distributed.dp_replicate // args.distributed.tp_size
 
-        logger.warning(
-            f"Setting Data Parallel size to {args.distributed.dp_replicate * args.distributed.dp_shard}"
-        )
-        assert (
-            args.distributed.dp_replicate
-            * args.distributed.dp_shard
-            * args.distributed.tp_size
-            == get_world_size()
-        )
+        logger.warning(f"Setting Data Parallel size to {args.distributed.dp_replicate * args.distributed.dp_shard}")
+        assert args.distributed.dp_replicate * args.distributed.dp_shard * args.distributed.tp_size == get_world_size()
 
         if args.distributed.fsdp_type == "no_shard":
-            assert (
-                args.distributed.dp_shard == 1
-                and args.distributed.dp_replicate == get_world_size()
-            )
+            assert args.distributed.dp_shard == 1 and args.distributed.dp_replicate == get_world_size()
 
     args.model.max_seqlen = args.data.seq_len
 
     if args.distributed.tp_size == 1:
-        logger.warning(
-            "Tensor parallelism has not been tested for a while, use at your own risk"
-        )
+        logger.warning("Tensor parallelism has not been tested for a while, use at your own risk")
 
-    assert (
-        args.probe_freq != args.profiling.mem_steps
-    ), "Don't profile during probe step"
-    assert (
-        args.probe_freq != args.profiling.profile_steps
-    ), "Don't profile during probe step"
+    assert args.probe_freq != args.profiling.mem_steps, "Don't profile during probe step"
+    assert args.probe_freq != args.profiling.profile_steps, "Don't profile during probe step"
     if args.logging.wandb is not None:
         args.logging.wandb.name = args.name
 
     if args.probe_freq is not None:
-        assert (
-            args.distributed.tp_size == 1
-        ), "Probing not supported with tensor parallelism"
+        assert args.distributed.tp_size == 1, "Probing not supported with tensor parallelism"
         assert (
             args.distributed.selective_activation_checkpointing is False
         ), "Probing not supported with selective activation checkpointing"
@@ -277,8 +250,12 @@ def train(args: TrainArgs):
         # which will silently fail (give nan gradients for example)
 
         if args.checkpoint.init_ckpt_path:
-            st_dict = torch.load(args.checkpoint.init_ckpt_path)
-            model.load_state_dict(st_dict)
+            # st_dict = torch.load(args.checkpoint.init_ckpt_path)
+            # model.load_state_dict(st_dict)
+            logger.info(f"Loading initial model from {args.checkpoint.init_ckpt_path}")
+            load_from_checkpoint(
+                args.checkpoint.init_ckpt_path, model, model_key="model"
+            )  # Put model_key="" if its directly the model checkpoint
         else:
             with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
                 torch.manual_seed(args.model.seed)
@@ -298,9 +275,7 @@ def train(args: TrainArgs):
 
         # build optimizer after apply parallelisms to the model
         optimizer, scheduler = build_optimizer(model, args.optim, args.steps)
-        data_loader_state = init_dataloader_state_from_args(
-            args.data, dp_rank, dp_degree
-        )
+        data_loader_state = init_dataloader_state_from_args(args.data, dp_rank, dp_degree)
 
         train_state = TrainState(
             step=0,
@@ -311,6 +286,14 @@ def train(args: TrainArgs):
 
         checkpoint = CheckpointManager(args.checkpoint)
         checkpoint.load(model, optimizer, train_state, world_mesh)
+        # Save checkpoint 0
+        _ = checkpoint.save(
+            model,
+            optimizer,
+            train_state,
+            args,
+            device_mesh=world_mesh,
+        )
         # Either load from latest checkpoint or start from scratch
         if args.probe_freq is not None:
             if get_is_master():
@@ -318,11 +301,7 @@ def train(args: TrainArgs):
             torch.distributed.barrier()
             probe = AutoProbeD(
                 model,
-                (
-                    Path(args.dump_dir) / "probe" / f"probe.{dp_rank}.jsonl"
-                    if (dp_rank % 128 == 0)
-                    else None
-                ),
+                (Path(args.dump_dir) / "probe" / f"probe.{dp_rank}.jsonl" if (dp_rank % 128 == 0) else None),
             )
             probe_mod = model._orig_mod if args.distributed.compile else model
 
@@ -330,18 +309,14 @@ def train(args: TrainArgs):
 
         # train loop
         model.train()
-        metric_logger = context_stack.enter_context(
-            MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args)
-        )
+        metric_logger = context_stack.enter_context(MetricLogger(Path(args.dump_dir) / "metrics.jsonl", args))
         data_loader = context_stack.enter_context(
             build_dataloader_from_args(
                 args.data,
                 state=train_state.data_loader_state,
             )
         )
-        torch_profiler = context_stack.enter_context(
-            maybe_run_profiler(args.dump_dir, model, args.profiling)
-        )
+        torch_profiler = context_stack.enter_context(maybe_run_profiler(args.dump_dir, model, args.profiling))
 
         nwords_since_last_log = 0
         time_last_log = timer()
@@ -388,9 +363,7 @@ def train(args: TrainArgs):
                 # Here we do a fake forward and backward pass on a smaller
                 # batch size to avoid OOM
                 # This assumes the model has no stateful layers (batch norm..)
-                assert (
-                    next(probe_mod.parameters()).grad is None
-                ), "Can't probe model if grads are not reset"
+                assert next(probe_mod.parameters()).grad is None, "Can't probe model if grads are not reset"
 
                 with probe:
                     probe.metadata = {
@@ -410,9 +383,7 @@ def train(args: TrainArgs):
                     # We zero grads to cancel this fake step
                     optimizer.zero_grad()
 
-                assert (
-                    next(probe_mod.parameters()).grad is None
-                ), "Probe model shouldn't have grads at this point"
+                assert next(probe_mod.parameters()).grad is None, "Probe model shouldn't have grads at this point"
 
             loss = model(input_ids, labels)
 
@@ -425,13 +396,9 @@ def train(args: TrainArgs):
             loss = loss.detach() * args.grad_acc_steps
 
             # Warning: FSDP + clip grad norm for_each=true triggers seg faults on pytorch nightly
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=args.optim.clip, foreach=True
-            )
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.optim.clip, foreach=True)
 
-            grad_norm = (
-                grad_norm.full_tensor() if isinstance(grad_norm, DTensor) else grad_norm
-            ).item()
+            grad_norm = (grad_norm.full_tensor() if isinstance(grad_norm, DTensor) else grad_norm).item()
 
             # optimizer step
             if train_state.acc_step == 0:
@@ -464,12 +431,8 @@ def train(args: TrainArgs):
 
                 gpu_mem_stats = gpu_memory_monitor.get_peak_stats()
 
-                total_acc_steps = (
-                    args.grad_acc_steps * train_state.step + train_state.acc_step
-                )
-                tokens_per_gpu = (
-                    total_acc_steps * args.data.batch_size * args.data.seq_len
-                )
+                total_acc_steps = args.grad_acc_steps * train_state.step + train_state.acc_step
+                tokens_per_gpu = total_acc_steps * args.data.batch_size * args.data.seq_len
                 total_tokens = dp_degree * tokens_per_gpu
                 # This is an estimate and the correct values may change
                 # if you change the architecture
@@ -528,9 +491,9 @@ def train(args: TrainArgs):
                 )
 
             saved = False
-            if every_n_steps(
-                train_state, args.checkpoint.dump.every, acc_step=0
-            ) or every_n_steps(train_state, args.checkpoint.eval.every, acc_step=0):
+            if every_n_steps(train_state, args.checkpoint.dump.every, acc_step=0) or every_n_steps(
+                train_state, args.checkpoint.eval.every, acc_step=0
+            ):
                 saved = checkpoint.save(
                     model,
                     optimizer,
@@ -539,9 +502,7 @@ def train(args: TrainArgs):
                     device_mesh=world_mesh,
                 )
 
-            if args.eval is not None and every_n_steps(
-                train_state, args.checkpoint.eval.every, acc_step=0
-            ):
+            if args.eval is not None and every_n_steps(train_state, args.checkpoint.eval.every, acc_step=0):
                 from apps.mamba.eval import (
                     launch_eval,
                     EVAL_FOLDER_NAME,

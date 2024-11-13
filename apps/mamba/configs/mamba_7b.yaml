@@ -86,5 +86,3 @@ eval:
     reduce_generation_overhead: false
     max_tokens: 8192
     dtype: bf16
-
-  mp_size: 1

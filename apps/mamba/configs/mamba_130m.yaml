@@ -1,17 +1,17 @@
 # Template config, need to change dump_dir, data.root_dir and tokenizer.path
 
-dump_dir: /home1/09753/hprairie/scratch/mamba/130m/base3
+dump_dir: /home1/09753/hprairie/scratch/mamba/130m-run2/base3
 name: "mamba130m"
-steps: 60_000
+steps: 5_000
 probe_freq: null #100
-grad_acc_steps: 32
+grad_acc_steps: 11
 
 seed: 777
 optim:
-  lr: 3.0e-3
-  weight_decay: 0.033
-  warmup: 5000
-  lr_min_ratio: 0.000001
+  lr: 6.0e-4
+  weight_decay: 0.1
+  warmup: 500
+  lr_min_ratio: 0.00001
   clip: 1.0
 
 distributed:
@@ -26,7 +26,7 @@ model:
   dim: 768
   n_heads: 24
   n_groups: 1
-  state_dim: 128
+  state_dim: 64
   conv_size: 4
   n_layers: 24
   dt_bias: true
@@ -41,9 +41,9 @@ data:
   root_dir: /home1/09753/hprairie/scratch/data-shuffled
   sources:
     fineweb_edu_10bt: 100.0
-  batch_size: 4
+  batch_size: 16
   prefetch_size: 1024
-  seq_len: 4096
+  seq_len: 1024
   n_views: 2
   load_async: true
   add_bos: true
@@ -57,11 +57,11 @@ profiling:
 
 checkpoint:
   dump:
-    every: 2500
-    keep: 3
+    every: 500
+    keep: 100
   eval:
     every: 5000
-    keep: 2
+    keep: 100
 
 logging:
   freq: 1
