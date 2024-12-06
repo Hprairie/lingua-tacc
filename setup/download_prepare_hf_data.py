@@ -76,7 +76,7 @@ def setup_terashuf(work_dir):
     return terashuf_dir
 
 
-def main(dataset, memory, data_dir, seed=42):
+def main(dataset, memory, data_dir, seed=42, nchunks=32):
     # Configuration
     repo_id = {
         "fineweb_edu": "HuggingFaceFW/fineweb-edu",
@@ -116,8 +116,12 @@ def main(dataset, memory, data_dir, seed=42):
         "wikitext2": "wikitext-2-v1/train-*",
     }[dataset]
     suffix = ".jsonl"
+<<<<<<< HEAD
     nchunks = 32
     k_validation = 0  # 10000  # Number of lines to take from each chunk for validation
+=======
+    k_validation = 10000  # Number of lines to take from each chunk for validation
+>>>>>>> upstream/main
 
     # Setup terashuf
     terashuf_dir = setup_terashuf(work_dir)
@@ -158,7 +162,8 @@ if __name__ == "__main__":
     parser.add_argument("--memory", type=float, default=8)
     parser.add_argument("--data-dir", type=str, default="data")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--nchunks", type=int, default=32)
 
     args = parser.parse_args()
 
-    main(args.dataset, args.memory, args.data_dir, args.seed)
+    main(args.dataset, args.memory, args.data_dir, args.seed, args.nchunks)

@@ -250,12 +250,17 @@ def train(args: TrainArgs):
         # which will silently fail (give nan gradients for example)
 
         if args.checkpoint.init_ckpt_path:
+<<<<<<< HEAD
             # st_dict = torch.load(args.checkpoint.init_ckpt_path)
             # model.load_state_dict(st_dict)
             logger.info(f"Loading initial model from {args.checkpoint.init_ckpt_path}")
             load_from_checkpoint(
                 args.checkpoint.init_ckpt_path, model, model_key="model"
             )  # Put model_key="" if its directly the model checkpoint
+=======
+            logger.info(f"Loading initial model from {args.checkpoint.init_ckpt_path}")
+            load_from_checkpoint(args.checkpoint.init_ckpt_path, model, model_key="model") # Put model_key="" if its directly the model checkpoint
+>>>>>>> upstream/main
         else:
             with torch.random.fork_rng(devices=[torch.cuda.current_device()]):
                 torch.manual_seed(args.model.seed)
@@ -284,7 +289,7 @@ def train(args: TrainArgs):
             scheduler=scheduler,
         )
 
-        checkpoint = CheckpointManager(args.checkpoint)
+        checkpoint = CheckpointManager.instantiate_and_make_dir(args.checkpoint)
         checkpoint.load(model, optimizer, train_state, world_mesh)
         # Save checkpoint 0
         _ = checkpoint.save(

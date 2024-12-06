@@ -115,7 +115,13 @@ def main():
     gen_cfg = dataclass_from_dict(PackedCausalMambaGeneratorArgs, cfg, strict=False)
     print(cfg)
 
+<<<<<<< HEAD
     model, tokenizer = load_consolidated_model_and_tokenizer(cfg.ckpt, model_cls=LMMamba, model_args_cls=LMMambaArgs)
+=======
+    model, tokenizer, _ = load_consolidated_model_and_tokenizer(
+        cfg.ckpt, model_cls=LMMamba, model_args_cls=LMMambaArgs
+    )
+>>>>>>> upstream/main
 
     generator = PackedCausalMambaGenerator(gen_cfg, model, tokenizer)
 
