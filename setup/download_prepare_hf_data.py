@@ -7,6 +7,7 @@ import subprocess
 import requests
 from huggingface_hub import snapshot_download
 
+
 def run_command(command):
     print(f"Running: {command}")
     subprocess.run(command, shell=True, check=True)
@@ -24,7 +25,7 @@ def download_dataset(repo_id, local_dir, allow_patterns):
                 local_dir=local_dir,
                 allow_patterns=allow_patterns,
                 resume_download=True,
-                max_workers=16, # Don't hesitate to increase this number to lower the download time
+                max_workers=16,  # Don't hesitate to increase this number to lower the download time
             )
             break
         except requests.exceptions.ReadTimeout:
@@ -82,6 +83,8 @@ def main(dataset, memory, data_dir, seed=42):
         "fineweb_edu_10bt": "HuggingFaceFW/fineweb-edu",
         "dclm_baseline_1.0": "mlfoundations/dclm-baseline-1.0",
         "dclm_baseline_1.0_10prct": "mlfoundations/dclm-baseline-1.0",
+        "wikitext1": "Salesforce/wikitext",
+        "wikitext2": "Salesforce/wikitext",
     }[dataset]
     src_dir = f"{data_dir}/{dataset}"
     out_dir = f"{src_dir}_shuffled"
@@ -93,22 +96,28 @@ def main(dataset, memory, data_dir, seed=42):
         "fineweb_edu_10bt": ".jsonl",
         "dclm_baseline_1.0": ".jsonl.zst",
         "dclm_baseline_1.0_10prct": ".jsonl.zst",
+        "wikitext1": ".jsonl",
+        "wikitext2": ".jsonl",
     }[dataset]
     cat_command = {
         "fineweb_edu": "cat",
         "fineweb_edu_10bt": "cat",
         "dclm_baseline_1.0": "zstdcat",
         "dclm_baseline_1.0_10prct": "zstdcat",
+        "wikitext1": "cat",
+        "wikitext2": "cat",
     }[dataset]
     allow_patterns = {
         "fineweb_edu": None,
         "fineweb_edu_10bt": "sample/10BT/*",
         "dclm_baseline_1.0": "*.jsonl.zst",
         "dclm_baseline_1.0_10prct": "global-shard_01_of_10/*.jsonl.zst",
+        "wikitext1": "wikitext-103-v1/train-*",
+        "wikitext2": "wikitext-2-v1/train-*",
     }[dataset]
     suffix = ".jsonl"
     nchunks = 32
-    k_validation = 10000  # Number of lines to take from each chunk for validation
+    k_validation = 0  # 10000  # Number of lines to take from each chunk for validation
 
     # Setup terashuf
     terashuf_dir = setup_terashuf(work_dir)
@@ -116,7 +125,8 @@ def main(dataset, memory, data_dir, seed=42):
     # Download dataset
     download_dataset(repo_id, src_dir, allow_patterns)
 
-    if "fineweb" in dataset:
+    parquet = ["fineweb", "wikitext"]
+    if any(orig in dataset for orig in parquet):
         parquet_to_jsonl(dataset, work_dir, src_dir, src_dir)
 
     # Set up environment variables

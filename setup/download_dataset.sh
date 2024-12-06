@@ -19,7 +19,7 @@ current_date=$(date +%y%m%d)
 
 # Create environment name with the current date
 env_prefix=lingua_241028
-dataset=fineweb_edu_10bt
+dataset=wikitext1
 directory=$SCRATCH/data
 
 # Enable the conda environment

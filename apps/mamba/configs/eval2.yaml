@@ -1,8 +1,8 @@
 name: "debug_evals"
-dump_dir: /home1/09753/hprairie/scratch/mamba/130m_eval_testing/base3/0000010000
-ckpt_dir: /home1/09753/hprairie/scratch/mamba/130m/base3/checkpoints/0000010000
+dump_dir: /home1/09753/hprairie/scratch/mamba/130m-run-2-eval/full/0000005000
+ckpt_dir: /home1/09753/hprairie/scratch/mamba/130m-run2/full/checkpoints/0000005000
 generator:
-  max_tokens: 8192
+  max_tokens: 1024
   dtype: bf16
   temperature: 1.0
   top_p: 0.95
